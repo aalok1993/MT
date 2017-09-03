@@ -57,6 +57,7 @@ same_category = False # if True, A an B from same synset
 align_direction_with_movement = True
 animation = True
 single_frames = False # export rendering as single .png images
+two_vids = False
 
 
 synset_name_pairs = [('02691156', 'aeroplane'),
@@ -84,48 +85,6 @@ def set_up_world(name, horizon_color= (0.460041, 0.703876, 1), zenith_color = (0
     new_world.use_sky_real = True
     new_world.horizon_color = horizon_color
     new_world.zenith_color = zenith_color
-
-def addScene(sceneName, engine, filepath, image_size, resolution_percentage, world, use_gpu):
-    scene = bpy.data.scenes.new(sceneName)
-    scene.render.engine = engine
-    scene.render.image_settings.color_mode ='RGBA'
-    scene.render.filepath = filepath
-    scene.render.resolution_x = image_size
-    scene.render.resolution_y = image_size
-    scene.render.resolution_percentage = resolution_percentage
-    scene.world = bpy.data.worlds.get(world)
-    #scene.render.alpha_mode = 'TRANSPARENT'
-    scene.render.alpha_mode = 'SKY'
-    print(scene.world)
-    # add ligth from all directions
-    scene.world.light_settings.use_environment_light = True
-    scene.world.light_settings.environment_energy = np.random.uniform(0,1)
-    scene.world.light_settings.environment_color = 'PLAIN'
-
-    if use_gpu and engine == 'cycles':
-        scene.cycles.device = 'GPU'
-    return scene
-
-def updateScene(scene, objects, lamps, camera):
-    """Set lamps and cameras for given scene
-
-    # Arguments
-        scene: String, name of scene
-        objects: list of object names
-        lamps: list of lamp names to use in scene
-        camera: camera name to use in scene
-    """
-    # select scene
-    bpy.context.screen.scene = bpy.data.scenes[scene]
-
-    # delete all objects currently in scene:
-    bpy.ops.object.select_all(action='DESELECT')
-    for obj in bpy.data.objects:
-        obj.select == True
-        bpy.ops.object.delete()
-    for obj in objects:
-        addObject()
-
 
 # A function to make a camera point towards any point in space
 # Reference: https://blender.stackexchange.com/questions/5210/pointing-the-camera-in-a-particular-direction-programmatically
@@ -202,8 +161,76 @@ def get_random_rot_euler():
     return ((theta1, theta2, theta3))
 
 
+def preprocess_object(obj,fov):
+    Bx = np.array([(obj.matrix_world * v.co) for v in obj.data.vertices])
+    bbox = [ [np.min(Bx[:,0]), np.min(Bx[:,1]), np.min(Bx[:,2])], [np.max(Bx[:,0]), np.max(Bx[:,1]), np.max(Bx[:,2])] ]
+    size_obj = [ bbox[1][0]-bbox[0][0], bbox[1][1]-bbox[0][1], bbox[1][2]-bbox[0][2] ]
+    #obj.location = obj.location - Vector(( (bbox[0][0]+bbox[1][0])/2, (bbox[0][1]+bbox[1][1])/2, (bbox[0][2]+bbox[1][2])/2 ))
+    size_max = max(size_obj[0:2])
+    scale = (fov/size_max)*(COVERAGE)         # this makes the largest dimension of the object cover <coverage>*100 % of the image
+    obj.scale = Vector((scale,scale,scale))
+    obj.rotation_euler = get_random_rot_euler()
+    size_obj = np.array(size_obj)*scale
+    return size_obj[0], size_obj[1]
 
-######## Setting up .blend file ################################################
+
+def addScene(sceneName, engine, filepath, image_size, resolution_percentage, world=None, use_gpu = False):
+    scene = bpy.data.scenes.new(sceneName)
+    scene.render.engine = engine
+    scene.render.image_settings.color_mode ='RGBA'
+    scene.render.filepath = filepath
+    scene.render.resolution_x = image_size
+    scene.render.resolution_y = image_size
+    scene.render.resolution_percentage = resolution_percentage
+    if world:
+        scene.world = bpy.data.worlds.get(world)
+        scene.render.alpha_mode = 'SKY'
+        # add ligth from all directions
+        scene.world.light_settings.use_environment_light = True
+        scene.world.light_settings.environment_energy = np.random.uniform(0,1)
+        scene.world.light_settings.environment_color = 'PLAIN'
+
+    if use_gpu and engine == 'cycles':
+        scene.cycles.device = 'GPU'
+    return scene
+
+def updateScene(scene_name, object_paths, lamps, camera = None):
+    """Set lamps and cameras for given scene
+
+    # Arguments
+        scene: String, name of scene
+        objects: list of object pathes
+        lamps: list of dictionary with lamp properties
+        camera: dictionary with camera properties
+    """
+    # select scene
+    bpy.context.screen.scene = bpy.data.scenes[scene_name]
+
+    # delete all objects currently in scene:
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in bpy.data.objects:
+        obj.select == True
+        bpy.ops.object.delete()
+    objs = {}
+    for n, obj_path in enumerate(object_paths):
+        key = 'obj{}'.format(n)
+        objs[key] = addObject(obj_path, axis_forward='-X', axis_up='Y')
+
+    for lamp in lamps:
+        addLamps(lamp['name'], lamp['type'], lamp['loc'], lamp['rot'],
+            lamp['bIsPoint'], lamp['pointTo'])
+
+    if camera:
+        addCameras(camera['name'], camera['loc'], camera['rot'],
+            camera['bIsPoint'], camera['pointTo'])
+
+    bpy.context.screen.scene.update()
+
+    if 'obj0' in objs:
+        return objs['obj0']
+
+
+######## Setting up Scenes and Objects #########################################
 
 # sample two objects from ShapeNet dataset
 synsets = os.listdir(DATA_PATH)
@@ -229,52 +256,88 @@ names = {}
 names['A'] = name_from_path(obj_pathA)
 names['B'] = name_from_path(obj_pathB)
 
-# Generate 2 new scenes
 
-set_up_world('world_A')
-set_up_world('world_B')
-scene1 = addScene(sceneName1, 'BLENDER_RENDER', OUT_PATH + 'A.png', IMAGE_SIZE, 100, 'world_A', USE_GPU)
-scene2 = addScene(sceneName2, 'BLENDER_RENDER', OUT_PATH + 'B.png', IMAGE_SIZE, 100, 'world_B', USE_GPU)
+if two_vids:
+    # setup cameras and lamps
+    cameraA = {'name': cameraName1,
+            'loc': camera_location,
+            'rot':  camera_rot,
+            'bIsPoint': True,
+            'pointTo': origin
+    }
+    cameraB = {'name': cameraName2,
+            'loc': camera_location,
+            'rot':  camera_rot,
+            'bIsPoint': True,
+            'pointTo': origin
+    }
 
-# Set scene 1 as screen for loading and processing object A
-bpy.context.screen.scene = scene1
+    lampsA = [
+        {'name': lampName1,
+            'type': 'POINT',
+            'loc': lamp_location,
+            'rot': lamp_rot,
+            'bIsPoint': True,
+            'pointTo': origin
+        }
+    ]
+    lampsB = [
+        {'name': lampName1,
+            'type': 'POINT',
+            'loc': lamp_location,
+            'rot': lamp_rot,
+            'bIsPoint': True,
+            'pointTo': origin
+        }
+    ]
 
-camera1 = addCameras(cameraName1, camera_location, camera_rot, True, origin)
-lamp1 = addLamps(lampName1, 'POINT', lamp_location, lamp_rot, True, origin)
-#obj_pathA = '/home/laurenz/IITGN/motion_transfer/datasets/shapeNet/e480a15c22ee438753388b7ae6bc11aa/models/model_normalized.obj'
-#obj_path1 = '/home/laurenz/IITGN/motion_transfer/data/shapeNet/test/test.obj'
-obj1 = addObject(obj_pathA, axis_forward='-X', axis_up='Y')
-obj1.rotation_euler = get_random_rot_euler()
-scene1.update()
+    set_up_world('world_A')
+    set_up_world('world_B')
+    scene1 = addScene(sceneName1, 'BLENDER_RENDER', OUT_PATH + 'A.png', IMAGE_SIZE, 100, 'world_A', USE_GPU)
+    scene2 = addScene(sceneName2, 'BLENDER_RENDER', OUT_PATH + 'B.png', IMAGE_SIZE, 100, 'world_B', USE_GPU)
+    camera_scene = scene1
 
+    obj1 = updateScene(sceneName1, [obj_pathA], lampsA, cameraA)
+    obj2 = updateScene(sceneName2, [obj_pathB], lampsB, cameraB)
 
-bpy.context.screen.scene = scene2
+if not two_vids:
+    cameraT = {'name': 'target_camera',
+            'loc': camera_location,
+            'rot':  camera_rot,
+            'bIsPoint': True,
+            'pointTo': origin
+    }
 
-camera2 = addCameras(cameraName2, camera_location, camera_rot, True, origin)
-lamp2 = addLamps(lampName2, 'POINT', lamp_location, lamp_rot, True, origin)
-#obj_pathB = '/home/laurenz/IITGN/motion_transfer/datasets/shapeNet/1b90541c9d95d65d2b48e2e94b50fd01/models/model_normalized.obj'
-obj2 = addObject(obj_pathB, axis_forward='-X', axis_up='Y')
-obj2.rotation_euler = get_random_rot_euler()
-scene2.update()
+    lampsT = [
+        {'name': 'target_lamp',
+            'type': 'POINT',
+            'loc': lamp_location,
+            'rot': lamp_rot,
+            'bIsPoint': True,
+            'pointTo': origin
+        }
+    ]
 
+    set_up_world('target')
+
+    scene1 = addScene(sceneName1, 'BLENDER_RENDER', OUT_PATH + 'A.avi', IMAGE_SIZE, 100, use_gpu = USE_GPU)
+    scene2 = addScene(sceneName2, 'BLENDER_RENDER', OUT_PATH + 'B.avi', IMAGE_SIZE, 100, use_gpu = USE_GPU)
+    target_scene = addScene('target', 'BLENDER_RENDER', OUT_PATH + 'AB.avi', IMAGE_SIZE, 100, world = 'target', use_gpu = USE_GPU)
+    camera_scene = target_scene
+
+    obj1 = updateScene(sceneName1, [obj_pathA], [])
+    obj2 = updateScene(sceneName2, [obj_pathB], [])
+    updateScene('target', [], lampsT, cameraT)
+
+Scenes = {'A':scene1, 'B':scene2, 'target': target_scene}
+Objs = {'A':obj1, 'B':obj2}
+opposite = {'A': 'B', 'B': 'A'}
+
+######## Calculate Trajectory ##################################################
 
 # Refer this for FOV length http://www.scantips.com/lights/subjectdistance.html
-fov = (CAM_DISTANCE * tan(scene1.camera.data.angle/2))*2
+fov = (CAM_DISTANCE * tan(camera_scene.camera.data.angle/2))*2
 # fov_in_meters = 9.14
-
-
-
-def preprocess_object(obj,fov):
-    Bx = np.array([(obj.matrix_world * v.co) for v in obj.data.vertices])
-    bbox = [ [np.min(Bx[:,0]), np.min(Bx[:,1]), np.min(Bx[:,2])], [np.max(Bx[:,0]), np.max(Bx[:,1]), np.max(Bx[:,2])] ]
-    size_obj = [ bbox[1][0]-bbox[0][0], bbox[1][1]-bbox[0][1], bbox[1][2]-bbox[0][2] ]
-    #obj.location = obj.location - Vector(( (bbox[0][0]+bbox[1][0])/2, (bbox[0][1]+bbox[1][1])/2, (bbox[0][2]+bbox[1][2])/2 ))
-    size_max = max(size_obj[0:2])
-    scale = (fov/size_max)*(COVERAGE)         # this makes the largest dimension of the object cover <coverage>*100 % of the image
-    obj.scale = Vector((scale,scale,scale))
-    size_obj = np.array(size_obj)*scale
-    return size_obj[0], size_obj[1]
-
 
 Sx = fov
 Sy = fov
@@ -312,40 +375,39 @@ P['A']['y'] = np.linspace(y1_a, y2_a, num_frames)
 P['B']['x'] = np.linspace(x1_b, x2_b, num_frames)
 P['B']['y'] = np.linspace(y1_b, y2_b, num_frames)
 
-Objs = {'A':obj1, 'B':obj2}
-Scenes = {'A':scene1, 'B':scene2}
-opposite = {'A': 'B', 'B': 'A'}
-
-
 ######## Create Animation ######################################################
 
 for n in range(N):
-    bpy.context.screen.scene = Scenes['A']
-    bpy.context.scene.frame_end = 10*2
+    if not two_vids:
+        bpy.context.screen.scene = Scenes['target']
+        bpy.context.scene.frame_start = 0
+        bpy.context.scene.frame_end = num_frames*2 -1
     for name in ['A','B']:
         add_frames = 0
         if name == 'B':
             add_frames = 10
-        #bpy.context.screen.scene = Scenes[name]
-        if name == "B":
+
+        if two_vids:
+            bpy.context.screen.scene = Scenes[name]
+            bpy.context.scene.frame_start = 0
+            bpy.context.scene.frame_end = num_frames -1
+        if not two_vids:
             bpy.context.scene.objects.link(Objs[name])
-            #bpy.ops.outliner.scene_drop(object = name_from_path(paths[name]), scene = Scenes['A'])
-        bpy.context.scene.frame_set(add_frames)
-        bpy.data.objects[names[name]].hide_render = False
-        bpy.data.objects[names[opposite[name]]].hide_render = True
-        print(name)
-        for _, obj in Objs.items():
-            obj.keyframe_insert(data_path='hide_render')
-        bpy.context.scene.update()
-        print(name)
+            bpy.context.scene.frame_set(add_frames)
+            bpy.data.objects[names[name]].hide_render = False
+            bpy.data.objects[names[opposite[name]]].hide_render = True
+            for _, obj in Objs.items():
+                obj.keyframe_insert(data_path='hide_render')
+            bpy.context.scene.update()
+
         # set up animation
-        #bpy.context.scene.frame_end = 10*2
-        #bpy.ops.object.select_pattern(pattern=names[name])
+        bpy.ops.object.select_pattern(pattern=names[name])
         print('Active Object: {}'.format(bpy.context.scene.objects.active))
-        #bpy.ops.object.mode_set(mode='OBJECT')
+
         if align_direction_with_movement:
             direction = Vector((P[name]['x'][1]-P[name]['x'][0], P[name]['y'][1]-P[name]['y'][0], 0))
             look_in(Objs[name], direction)
+
         if animation:
             for i in range(num_frames):
                 bpy.context.scene.frame_set(i+add_frames)
@@ -354,10 +416,6 @@ for n in range(N):
                 if single_frames:
                     bpy.context.scene.render.filepath = OUT_PATH + '{:s}_{:02d}.jpg'.format(name,i)
                     bpy.ops.render.render(write_still=True)
-    if not single_frames:
-        bpy.context.scene.render.image_settings.file_format = 'AVI_JPEG'
-        bpy.context.scene.render.fps = 6
-        bpy.ops.render.render(animation=True)
 
         if not animation:
             imgs = []
@@ -457,7 +515,17 @@ for n in range(N):
             # Finish up
             p.communicate()
 
-
+        if not single_frames and two_vids:
+            if name == 'B':
+                bpy.context.scene.frame_start = add_frames
+                bpy.context.scene.frame_end = num_frames*2 -1
+            bpy.context.scene.render.image_settings.file_format = 'AVI_JPEG'
+            bpy.context.scene.render.fps = 6
+            bpy.ops.render.render(animation=True)
+    if not single_frames and not two_vids:
+        bpy.context.scene.render.image_settings.file_format = 'AVI_JPEG'
+        bpy.context.scene.render.fps = 6
+        bpy.ops.render.render(animation=True)
 
 runtime = timeit.default_timer() - start
 print('Runtime: {} s'.format(runtime))

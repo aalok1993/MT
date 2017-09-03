@@ -10,6 +10,9 @@
 # $ blender --background test.blend --python Generate_Dataset.py -- example args 123
 ##################################
 
+# TODO: uniform naming scheme: camel case or _
+# TODO: Commentation methods. cleaning up
+
 # All the essential libraries required are being imported below.
 import bpy
 from mathutils import Vector
@@ -20,6 +23,7 @@ from bpy.types import Operator
 import numpy as np
 import os
 import timeit
+import hashlib
 
 start = timeit.default_timer()
 
@@ -51,7 +55,8 @@ USE_GPU = True
 N = 1
 same_category = False # if True, A an B from same synset
 align_direction_with_movement = True
-single_frames = False
+animation = True
+single_frames = False # export rendering as single .png images
 
 
 synset_name_pairs = [('02691156', 'aeroplane'),
@@ -66,6 +71,11 @@ synset_name_pairs = [('02691156', 'aeroplane'),
                              ('04256520', 'sofa'),
                              ('04468005', 'train'),
                              ('03211117', 'tvmonitor')]
+
+def name_from_path(obj_path):
+    hash_object = hashlib.md5(obj_path.encode())
+    return hash_object.hexdigest()
+
 
 def set_up_world(name, horizon_color= (0.460041, 0.703876, 1), zenith_color = (0.120707, 0.277449, 1)):
     new_world = bpy.data.worlds.new(name)
@@ -95,6 +105,27 @@ def addScene(sceneName, engine, filepath, image_size, resolution_percentage, wor
     if use_gpu and engine == 'cycles':
         scene.cycles.device = 'GPU'
     return scene
+
+def updateScene(scene, objects, lamps, camera):
+    """Set lamps and cameras for given scene
+
+    # Arguments
+        scene: String, name of scene
+        objects: list of object names
+        lamps: list of lamp names to use in scene
+        camera: camera name to use in scene
+    """
+    # select scene
+    bpy.context.screen.scene = bpy.data.scenes[scene]
+
+    # delete all objects currently in scene:
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in bpy.data.objects:
+        obj.select == True
+        bpy.ops.object.delete()
+    for obj in objects:
+        addObject()
+
 
 # A function to make a camera point towards any point in space
 # Reference: https://blender.stackexchange.com/questions/5210/pointing-the-camera-in-a-particular-direction-programmatically
@@ -160,7 +191,8 @@ def addObject(obj_path,axis_forward=None,axis_up=None):
     bpy.ops.object.join()
     # name object for future Refer
     obj = bpy.context.active_object
-    obj.name = obj_path
+    obj.name = name_from_path(obj_path)
+    print('Added Object from Path: {}'.format(obj_path))
     return obj
 
 def get_random_rot_euler():
@@ -170,12 +202,8 @@ def get_random_rot_euler():
     return ((theta1, theta2, theta3))
 
 
-# delete all objects currently in scene:
-# bpy.ops.object.select_all(action='DESELECT')
-# for obj in bpy.data.objects:
-#     print(obj)
-#     obj.select == True
-#     bpy.ops.object.delete()
+
+######## Setting up .blend file ################################################
 
 # sample two objects from ShapeNet dataset
 synsets = os.listdir(DATA_PATH)
@@ -194,6 +222,12 @@ obj_A_id = object_A_ids[random.randint(0, number_of_objects_A-1)]
 obj_B_id = object_B_ids[random.randint(0, number_of_objects_B-1)]
 obj_pathA = os.path.join(DATA_PATH, synset_A, obj_A_id, 'models/model_normalized.obj')
 obj_pathB = os.path.join(DATA_PATH, synset_B, obj_B_id, 'models/model_normalized.obj')
+paths = {}
+paths['A']= obj_pathA
+paths['B'] = obj_pathB
+names = {}
+names['A'] = name_from_path(obj_pathA)
+names['B'] = name_from_path(obj_pathB)
 
 # Generate 2 new scenes
 
@@ -241,15 +275,6 @@ def preprocess_object(obj,fov):
     size_obj = np.array(size_obj)*scale
     return size_obj[0], size_obj[1]
 
-# Bx1 = np.array([(obj1.matrix_world * v.co) for v in obj1.data.vertices])
-# bbox1 = [   [np.min(Bx1[:,0]), np.min(Bx1[:,1]), np.min(Bx1[:,2])],
-#             [np.max(Bx1[:,0]), np.max(Bx1[:,1]), np.max(Bx1[:,2])]
-#         ]
-# size_obj1 = [ bbox1[1][0]-bbox1[0][0], bbox1[1][1]-bbox1[0][1], bbox1[1][2]-bbox1[0][2] ]
-# obj1.location = obj1.location - Vector(( (bbox1[0][0]+bbox1[1][0])/2, (bbox1[0][1]+bbox1[1][1])/2, (bbox1[0][2]+bbox1[1][2])/2 ))
-# size_max = max(size_obj1[0:2])
-# scale1 = fov/(3*size_max)         # this makes the largest dimension of the object cover 1/3rd of the image
-# obj1.scale = Vector((scale1,scale1,scale1))
 
 Sx = fov
 Sy = fov
@@ -289,30 +314,52 @@ P['B']['y'] = np.linspace(y1_b, y2_b, num_frames)
 
 Objs = {'A':obj1, 'B':obj2}
 Scenes = {'A':scene1, 'B':scene2}
+opposite = {'A': 'B', 'B': 'A'}
+
+
+######## Create Animation ######################################################
 
 for n in range(N):
+    bpy.context.screen.scene = Scenes['A']
+    bpy.context.scene.frame_end = 10*2
     for name in ['A','B']:
-        bpy.context.screen.scene = Scenes[name]
+        add_frames = 0
+        if name == 'B':
+            add_frames = 10
+        #bpy.context.screen.scene = Scenes[name]
+        if name == "B":
+            bpy.context.scene.objects.link(Objs[name])
+            #bpy.ops.outliner.scene_drop(object = name_from_path(paths[name]), scene = Scenes['A'])
+        bpy.context.scene.frame_set(add_frames)
+        bpy.data.objects[names[name]].hide_render = False
+        bpy.data.objects[names[opposite[name]]].hide_render = True
+        print(name)
+        for _, obj in Objs.items():
+            obj.keyframe_insert(data_path='hide_render')
         bpy.context.scene.update()
+        print(name)
         # set up animation
-        bpy.context.scene.frame_end = 10
-        bpy.ops.object.select_pattern(pattern='obj_path{}'.format(name))
+        #bpy.context.scene.frame_end = 10*2
+        #bpy.ops.object.select_pattern(pattern=names[name])
         print('Active Object: {}'.format(bpy.context.scene.objects.active))
         #bpy.ops.object.mode_set(mode='OBJECT')
         if align_direction_with_movement:
             direction = Vector((P[name]['x'][1]-P[name]['x'][0], P[name]['y'][1]-P[name]['y'][0], 0))
             look_in(Objs[name], direction)
-        if not single_frames:
+        if animation:
             for i in range(num_frames):
-                bpy.context.scene.frame_set(i)
+                bpy.context.scene.frame_set(i+add_frames)
                 Objs[name].location = Vector((P[name]['x'][i], P[name]['y'][i], 0))
                 Objs[name].keyframe_insert(data_path="location")
-                #bpy.context.scene.render.filepath = OUT_PATH + '{:s}_{:02d}.jpg'.format(name,i)
-                #bpy.ops.render.render(write_still=True)
-            bpy.context.scene.render.image_settings.file_format = 'FFMPEG'
-            bpy.context.scene.render.fps = 6
-            bpy.ops.render.render(animation=True)
-        else:
+                if single_frames:
+                    bpy.context.scene.render.filepath = OUT_PATH + '{:s}_{:02d}.jpg'.format(name,i)
+                    bpy.ops.render.render(write_still=True)
+    if not single_frames:
+        bpy.context.scene.render.image_settings.file_format = 'AVI_JPEG'
+        bpy.context.scene.render.fps = 6
+        bpy.ops.render.render(animation=True)
+
+        if not animation:
             imgs = []
             # code from: https://ammous88.wordpress.com/2015/01/16/blender-access-render-results-pixels-directly-from-python-2/
             # switch on nodes
@@ -364,7 +411,7 @@ for n in range(N):
                 img.save(os.path.join(OUT_PATH, "test_" + str(i) + '.png'), 'PNG')
                 #print(array[:,:,:])
                 #img.save(os.path.join(OUT_PATH, "test_" + str(i) + '.png'))
-                '''
+            '''
             import sys
             #sys.path.append('/usr/lib/python3.4/tkinter/')
             #sys.path.append('/home/laurenz/anaconda3/lib/python3.6/tkinter/')
@@ -409,9 +456,6 @@ for n in range(N):
 
             # Finish up
             p.communicate()
-
-
-
 
 
 

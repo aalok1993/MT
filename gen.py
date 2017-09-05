@@ -2,6 +2,7 @@
 
 import os
 import sys
+import inspect
 
 import bpy
 
@@ -11,6 +12,7 @@ if not dir in sys.path:
     sys.path.append(dir)
 
 from gen_options import GenOptions
+from managed_scene import ManagedScene
 
 # parse arguments
 try:
@@ -18,3 +20,5 @@ try:
 except ValueError:
     args = []
 opt = GenOptions().parse(args)
+
+scene = ManagedScene

@@ -4,37 +4,50 @@
 # Make sure that GPU is used while rendering. (1) Enable in user prefs, (2) enable in render properties bpy.context.scene.cycles.device = 'GPU'
 # Reference: https://blender.stackexchange.com/questions/7485/enabling-gpu-rendering-for-cycles/7486#7486
 
-##############################
 # Execute this script in the background in console
 # Reference: https://blender.stackexchange.com/questions/6817/how-to-pass-command-line-arguments-to-a-blender-python-script
 # $ blender --background test.blend --python Generate_Dataset.py -- example args 123
-##################################
 
 # TODO: uniform naming scheme: camel case or _
 # TODO: Commentation methods. cleaning up
 
-# All the essential libraries required are being imported below.
-import bpy
-from mathutils import Vector
+import timeit
+start = timeit.default_timer()
+
+import sys
+import os
+import numpy as np
 from math import radians, tan
 import random
 #random.seed(123454)
-from bpy.types import Operator
-import numpy as np
-import os
-import timeit
 import hashlib
 
-start = timeit.default_timer()
+import bpy
+from mathutils import Vector
+from bpy.types import Operator
+
+# to import own modules
+dir = os.path.dirname(bpy.data.filepath)
+if not dir in sys.path:
+    sys.path.append(dir)
+
+from gen_options import GenOptions
+
+# parse arguments
+try:
+    args = sys.argv[sys.argv.index('--') + 1:]
+except ValueError:
+    args = []
+opt = GenOptions().parse(args)
+
 
 # Define all the functions, parameters, options that are
 # going to be used in the code.
 
 # Variables
-IMAGE_SIZE = 256
 # MAX_COV = 0.4
 # MIN_COV = 0.2
-COVERAGE = 1/3
+COVERAGE = 1.0/3
 CAM_DISTANCE = 10
 origin = Vector((0,0,0))
 camera_location = Vector((0,0,CAM_DISTANCE))
@@ -47,11 +60,7 @@ lampName1 = 'Lamp1'
 lampName2 = 'Lamp2'
 sceneName1 = 'Scene1'
 sceneName2 = 'Scene2'
-DATA_PATH = '/media/laurenz/Seagate Backup Plus Drive/ShapeNet/ShapeNetCore.v2/'
-#OUT_PATH = '/media/innit/Zone_D/MotionTransfer/DataGeneration/Data/'
-OUT_PATH = '/home/laurenz/IITGN/motion_transfer/data_generation/data/'
-num_frames = 10
-USE_GPU = True
+
 N = 1
 same_category = False # if True, A an B from same synset
 align_direction_with_movement = True
@@ -174,14 +183,14 @@ def preprocess_object(obj,fov):
     return size_obj[0], size_obj[1]
 
 
-def addScene(sceneName, engine, filepath, image_size, resolution_percentage, world=None, use_gpu = False):
+def addScene(sceneName, engine, filepath, image_size, world=None, use_gpu = False):
     scene = bpy.data.scenes.new(sceneName)
-    scene.render.engine = engine
-    scene.render.image_settings.color_mode ='RGBA'
-    scene.render.filepath = filepath
-    scene.render.resolution_x = image_size
-    scene.render.resolution_y = image_size
-    scene.render.resolution_percentage = resolution_percentage
+    scene.render.engine = opt.engine
+    scene.render.image_settings.color_mode = opt.color_mode
+    scene.render.filepath = os.path.join(opt.outroot + sceneName)
+    scene.render.resolution_x = opt.image_size
+    scene.render.resolution_y = opt.image_size
+    scene.render.resolution_percentage = opt.resolution_percentage
     if world:
         scene.world = bpy.data.worlds.get(world)
         scene.render.alpha_mode = 'SKY'
@@ -190,7 +199,7 @@ def addScene(sceneName, engine, filepath, image_size, resolution_percentage, wor
         scene.world.light_settings.environment_energy = np.random.uniform(0,1)
         scene.world.light_settings.environment_color = 'PLAIN'
 
-    if use_gpu and engine == 'cycles':
+    if use_gpu and engine == 'CYCLES':
         scene.cycles.device = 'GPU'
     return scene
 
@@ -233,22 +242,22 @@ def updateScene(scene_name, object_paths, lamps, camera = None):
 ######## Setting up Scenes and Objects #########################################
 
 # sample two objects from ShapeNet dataset
-synsets = os.listdir(DATA_PATH)
+synsets = os.listdir(opt.dataroot)
 number_of_synsets = len(synsets)
 synset_A = synsets[random.randint(0, number_of_synsets-1)]
 if not same_category:
     synset_B = synsets[random.randint(0, number_of_synsets-1)]
 else:
     synset_B = synset_A
-print('synset_B: {}, synset_B: {}'.format(synset_A, synset_B))
-object_A_ids = os.listdir(os.path.join(DATA_PATH, synset_A))
-object_B_ids = os.listdir(os.path.join(DATA_PATH, synset_B))
+print('synset_A: {}, synset_B: {}'.format(synset_A, synset_B))
+object_A_ids = os.listdir(os.path.join(opt.dataroot, synset_A))
+object_B_ids = os.listdir(os.path.join(opt.dataroot, synset_B))
 number_of_objects_A = len(object_A_ids)
 number_of_objects_B = len(object_B_ids)
 obj_A_id = object_A_ids[random.randint(0, number_of_objects_A-1)]
 obj_B_id = object_B_ids[random.randint(0, number_of_objects_B-1)]
-obj_pathA = os.path.join(DATA_PATH, synset_A, obj_A_id, 'models/model_normalized.obj')
-obj_pathB = os.path.join(DATA_PATH, synset_B, obj_B_id, 'models/model_normalized.obj')
+obj_pathA = os.path.join(opt.dataroot, synset_A, obj_A_id, 'models/model_normalized.obj')
+obj_pathB = os.path.join(opt.dataroot, synset_B, obj_B_id, 'models/model_normalized.obj')
 paths = {}
 paths['A']= obj_pathA
 paths['B'] = obj_pathB
@@ -293,8 +302,8 @@ if two_vids:
 
     set_up_world('world_A')
     set_up_world('world_B')
-    scene1 = addScene(sceneName1, 'BLENDER_RENDER', OUT_PATH + 'A.png', IMAGE_SIZE, 100, 'world_A', USE_GPU)
-    scene2 = addScene(sceneName2, 'BLENDER_RENDER', OUT_PATH + 'B.png', IMAGE_SIZE, 100, 'world_B', USE_GPU)
+    scene1 = addScene(sceneName1, 'BLENDER_RENDER', opt.outroot + 'A.png', opt.image_size,  'world_A', opt.gpu)
+    scene2 = addScene(sceneName2, 'BLENDER_RENDER', opt.outroot + 'B.png', opt.image_size,  'world_B', opt.gpu)
     camera_scene = scene1
 
     obj1 = updateScene(sceneName1, [obj_pathA], lampsA, cameraA)
@@ -320,9 +329,9 @@ if not two_vids:
 
     set_up_world('target')
 
-    scene1 = addScene(sceneName1, 'BLENDER_RENDER', OUT_PATH + 'A.avi', IMAGE_SIZE, 100, use_gpu = USE_GPU)
-    scene2 = addScene(sceneName2, 'BLENDER_RENDER', OUT_PATH + 'B.avi', IMAGE_SIZE, 100, use_gpu = USE_GPU)
-    target_scene = addScene('target', 'BLENDER_RENDER', OUT_PATH + 'AB.avi', IMAGE_SIZE, 100, world = 'target', use_gpu = USE_GPU)
+    scene1 = addScene(sceneName1, 'BLENDER_RENDER', opt.outroot + 'A.avi', opt.image_size, use_gpu = opt.gpu)
+    scene2 = addScene(sceneName2, 'BLENDER_RENDER', opt.outroot + 'B.avi', opt.image_size,  use_gpu = opt.gpu)
+    target_scene = addScene('target', 'BLENDER_RENDER', opt.outroot + 'AB.avi', opt.image_size,  world = 'target', use_gpu = opt.gpu)
     camera_scene = target_scene
 
     obj1 = updateScene(sceneName1, [obj_pathA], [])
@@ -370,10 +379,10 @@ if random.randint(0,1)==1:
     y1_b, y2_b = y2_b, y1_b
 
 P = {'A':{},'B':{}}
-P['A']['x'] = np.linspace(x1_a, x2_a, num_frames)
-P['A']['y'] = np.linspace(y1_a, y2_a, num_frames)
-P['B']['x'] = np.linspace(x1_b, x2_b, num_frames)
-P['B']['y'] = np.linspace(y1_b, y2_b, num_frames)
+P['A']['x'] = np.linspace(x1_a, x2_a, opt.number_of_frames)
+P['A']['y'] = np.linspace(y1_a, y2_a, opt.number_of_frames)
+P['B']['x'] = np.linspace(x1_b, x2_b, opt.number_of_frames)
+P['B']['y'] = np.linspace(y1_b, y2_b, opt.number_of_frames)
 
 ######## Create Animation ######################################################
 
@@ -381,7 +390,7 @@ for n in range(N):
     if not two_vids:
         bpy.context.screen.scene = Scenes['target']
         bpy.context.scene.frame_start = 0
-        bpy.context.scene.frame_end = num_frames*2 -1
+        bpy.context.scene.frame_end = opt.number_of_frames*2 -1
     for name in ['A','B']:
         add_frames = 0
         if name == 'B':
@@ -390,7 +399,7 @@ for n in range(N):
         if two_vids:
             bpy.context.screen.scene = Scenes[name]
             bpy.context.scene.frame_start = 0
-            bpy.context.scene.frame_end = num_frames -1
+            bpy.context.scene.frame_end = opt.number_of_frames -1
         if not two_vids:
             bpy.context.scene.objects.link(Objs[name])
             bpy.context.scene.frame_set(add_frames)
@@ -409,12 +418,12 @@ for n in range(N):
             look_in(Objs[name], direction)
 
         if animation:
-            for i in range(num_frames):
+            for i in range(opt.number_of_frames):
                 bpy.context.scene.frame_set(i+add_frames)
                 Objs[name].location = Vector((P[name]['x'][i], P[name]['y'][i], 0))
                 Objs[name].keyframe_insert(data_path="location")
                 if single_frames:
-                    bpy.context.scene.render.filepath = OUT_PATH + '{:s}_{:02d}.jpg'.format(name,i)
+                    bpy.context.scene.render.filepath = opt.outroot + '{:s}_{:02d}.jpg'.format(name,i)
                     bpy.ops.render.render(write_still=True)
 
         if not animation:
@@ -442,20 +451,20 @@ for n in range(N):
             links.new(rl.outputs[0], v.inputs[0])  # link Image output to Viewer input
 
 
-            for i in range(num_frames):
+            for i in range(opt.number_of_frames):
                 Objs[name].location = Vector((P[name]['x'][i], P[name]['y'][i], 0))
-                bpy.context.scene.render.filepath = OUT_PATH + '{:s}_{:02d}.jpg'.format(name,i)
+                bpy.context.scene.render.filepath = opt.outroot + '{:s}_{:02d}.jpg'.format(name,i)
                 bpy.ops.render.render(write_still=True)
                 pixels = bpy.data.images['Viewer Node'].pixels
                 pixels = np.array(pixels)
-                pixels = np.reshape(pixels, (IMAGE_SIZE, IMAGE_SIZE, -1))
+                pixels = np.reshape(pixels, (opt.image_size, opt.image_size, -1))
                 imgs.append(pixels)
 
             from PIL import Image
 
             '''
             # test if imgs contrains correct frames/
-            for i in range(num_frames):
+            for i in range(opt.number_of_frames):
                 array = imgs[i]*255
                 #tmp = array[:, :, 3]
                 #array[:, :, 3] = array[:, :, 0]
@@ -466,9 +475,9 @@ for n in range(N):
                 #background = Image.new("RGB", img.size, (255, 255, 255))
                 #background.paste(img, mask=img.split()[3]) # 3 is the alpha channel
 
-                img.save(os.path.join(OUT_PATH, "test_" + str(i) + '.png'), 'PNG')
+                img.save(os.path.join(opt.outroot, "test_" + str(i) + '.png'), 'PNG')
                 #print(array[:,:,:])
-                #img.save(os.path.join(OUT_PATH, "test_" + str(i) + '.png'))
+                #img.save(os.path.join(opt.outroot, "test_" + str(i) + '.png'))
             '''
             import sys
             #sys.path.append('/usr/lib/python3.4/tkinter/')
@@ -481,7 +490,7 @@ for n in range(N):
 
             dpi = 100
             # create a figure window that is the exact size of the image
-            f = plt.figure(frameon=False, figsize=(float(IMAGE_SIZE)/dpi, float(IMAGE_SIZE)/dpi), dpi=dpi)
+            f = plt.figure(frameon=False, figsize=(float(opt.image_size)/dpi, float(opt.image_size)/dpi), dpi=dpi)
             canvas_width, canvas_height = f.canvas.get_width_height()
             ax = f.add_axes([0, 0, 1, 1])
             ax.axis('off')
@@ -490,7 +499,7 @@ for n in range(N):
                 plt.imshow(imgs[frame], interpolation='nearest')
 
             # Open an ffmpeg process
-            outf = os.path.join(OUT_PATH, name +'.mp4' )
+            outf = os.path.join(opt.outroot, name +'.mp4' )
             cmdstring = ('avconv',
                 '-y', '-r', '10', # overwrite, 30fps
                 '-s', '%dx%d' % (canvas_width, canvas_height), # size of image string
@@ -501,7 +510,7 @@ for n in range(N):
             p = subprocess.Popen(cmdstring, stdin=subprocess.PIPE)
 
             # Draw frames and write to the pipe
-            for frame in range(num_frames):
+            for frame in range(opt.number_of_frames):
                 # draw the frame
                 update(frame)
                 plt.draw()
@@ -518,7 +527,7 @@ for n in range(N):
         if not single_frames and two_vids:
             if name == 'B':
                 bpy.context.scene.frame_start = add_frames
-                bpy.context.scene.frame_end = num_frames*2 -1
+                bpy.context.scene.frame_end = opt.number_of_frames*2 -1
             bpy.context.scene.render.image_settings.file_format = 'AVI_JPEG'
             bpy.context.scene.render.fps = 6
             bpy.ops.render.render(animation=True)

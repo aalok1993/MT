@@ -183,7 +183,7 @@ def preprocess_object(obj,fov):
     return size_obj[0], size_obj[1]
 
 
-def addScene(sceneName, engine, filepath, image_size, world=None, use_gpu = False):
+def addScene(sceneName, world=None):
     scene = bpy.data.scenes.new(sceneName)
     scene.render.engine = opt.engine
     scene.render.image_settings.color_mode = opt.color_mode
@@ -302,8 +302,8 @@ if two_vids:
 
     set_up_world('world_A')
     set_up_world('world_B')
-    scene1 = addScene(sceneName1, 'BLENDER_RENDER', opt.outroot + 'A.png', opt.image_size,  'world_A', opt.gpu)
-    scene2 = addScene(sceneName2, 'BLENDER_RENDER', opt.outroot + 'B.png', opt.image_size,  'world_B', opt.gpu)
+    scene1 = addScene(sceneName1, 'world_A')
+    scene2 = addScene(sceneName2, 'world_B')
     camera_scene = scene1
 
     obj1 = updateScene(sceneName1, [obj_pathA], lampsA, cameraA)
@@ -329,9 +329,9 @@ if not two_vids:
 
     set_up_world('target')
 
-    scene1 = addScene(sceneName1, 'BLENDER_RENDER', opt.outroot + 'A.avi', opt.image_size, use_gpu = opt.gpu)
-    scene2 = addScene(sceneName2, 'BLENDER_RENDER', opt.outroot + 'B.avi', opt.image_size,  use_gpu = opt.gpu)
-    target_scene = addScene('target', 'BLENDER_RENDER', opt.outroot + 'AB.avi', opt.image_size,  world = 'target', use_gpu = opt.gpu)
+    scene1 = addScene(sceneName1)
+    scene2 = addScene(sceneName2)
+    target_scene = addScene('AB', world = 'target')
     camera_scene = target_scene
 
     obj1 = updateScene(sceneName1, [obj_pathA], [])

@@ -1,6 +1,5 @@
 ### Data Generation Code for Motion Transfer
 
-
 # Make sure that GPU is used while rendering. (1) Enable in user prefs, (2) enable in render properties bpy.context.scene.cycles.device = 'GPU'
 # Reference: https://blender.stackexchange.com/questions/7485/enabling-gpu-rendering-for-cycles/7486#7486
 
@@ -44,9 +43,6 @@ opt = GenOptions().parse(args)
 # Define all the functions, parameters, options that are
 # going to be used in the code.
 
-# Variables
-# MAX_COV = 0.4
-# MIN_COV = 0.2
 COVERAGE = 1.0/3
 CAM_DISTANCE = 10
 origin = Vector((0,0,0))
@@ -62,6 +58,7 @@ sceneName1 = 'Scene1'
 sceneName2 = 'Scene2'
 
 N = 1
+
 same_category = False # if True, A an B from same synset
 align_direction_with_movement = True
 animation = True
@@ -83,11 +80,35 @@ synset_name_pairs = [('02691156', 'aeroplane'),
                              ('03211117', 'tvmonitor')]
 
 def name_from_path(obj_path):
+    """ generate hashed name from path """
     hash_object = hashlib.md5(obj_path.encode())
     return hash_object.hexdigest()
 
+def look_in(obj, direction):
+    """ rotates object to point in direction
 
-def set_up_world(name, horizon_color= (0.460041, 0.703876, 1), zenith_color = (0.120707, 0.277449, 1)):
+    # Ref: https://blender.stackexchange.com/questions/5210/pointing-the-camera-in-a-particular-direction-programmatically
+    """
+    # point the objects '-Z' axis in direction and use its 'Y' as up
+    rot_quat = direction.to_track_quat('-Z', 'Y')
+    obj.rotation_euler = rot_quat.to_euler()
+
+def look_at(obj, point):
+    """ rotates object to point in direction of point"""
+    loc_obj = Vector(obj.location)
+    direction = point - loc_obj
+    look_in(obj, direction)
+
+def get_random_rot_euler():
+    """ returns three random euler angles"""
+    theta1 = radians(random.uniform(0,360))#random.uniform(0,360)
+    theta2 = radians(random.uniform(0,360))
+    theta3 = radians(random.uniform(0,360))
+    return ((theta1, theta2, theta3))
+
+def set_up_world(name, horizon_color= (0.460041, 0.703876, 1),
+    zenith_color = (0.120707, 0.277449, 1)):
+    """ create world object """
     new_world = bpy.data.worlds.new(name)
     new_world.use_sky_paper = True
     new_world.use_sky_blend = True
@@ -95,88 +116,76 @@ def set_up_world(name, horizon_color= (0.460041, 0.703876, 1), zenith_color = (0
     new_world.horizon_color = horizon_color
     new_world.zenith_color = zenith_color
 
-# A function to make a camera point towards any point in space
-# Reference: https://blender.stackexchange.com/questions/5210/pointing-the-camera-in-a-particular-direction-programmatically
-def look_at(obj, point):
-    loc_obj = Vector(obj.location)
-    direction = point - loc_obj
-    rot_quat = direction.to_track_quat('-Z', 'Y')       # point the cameras '-Z' and use its 'Y' as up
-    obj.rotation_euler = rot_quat.to_euler()     # assume we're using euler rotation
-
-def look_in(obj, direction):
-    rot_quat = direction.to_track_quat('-Z', 'Y')       # point the object '-Z' and use its 'Y' as up
-    obj.rotation_euler = rot_quat.to_euler()     # assume we're using euler rotation
-
-# A function to add camera and look at X
-def addCameras(camera_name,loc_point,loc_rot,bIsPoint,pointTo = None):
+def addCameras(camera_name, loc_point, point_to = None, loc_rot=None):
+    """Add a camera to currently selected scene """
     camera_data = bpy.data.cameras.new(camera_name)
     camera = bpy.data.objects.new(camera_name, camera_data)
     camera.location = loc_point
-    #camera.rotation_euler = (loc_rot[0]*constRadToDeg,loc_rot[1]*constRadToDeg, loc_rot[2]*constRadToDeg)
-    if bIsPoint:
-        look_at(camera, pointTo)
-    else:
+    if point_to:
+        look_at(camera, point_to)
+    elif loc_rot:
         camera.rotation_euler = (loc_rot[0]*constRadToDeg,loc_rot[1]*constRadToDeg, loc_rot[2]*constRadToDeg)
     bpy.context.scene.objects.link(camera)
     bpy.context.scene.camera = camera
     return camera
 
-# A function to add lamp and look at X
-def addLamps(lamp_name, lamp_type, loc_point, loc_rot, bIsPoint, pointTo = None):
+def addLamps(lamp_name, lamp_type, lamp_energy, loc_point, point_to = None,
+    loc_rot = None):
+    """Add a lamp to currently selected scene """
     lamp_data = bpy.data.lamps.new(name=lamp_name, type=lamp_type)
     lamp = bpy.data.objects.new(name=lamp_name, object_data=lamp_data)
     lamp.location = loc_point
-    if bIsPoint:
-        look_at(lamp, pointTo)
-    else:
+    if point_to:
+        look_at(lamp, point_to)
+    elif loc_rot:
         lamp.rotation_euler = (loc_rot[0]*constRadToDeg,loc_rot[1]*constRadToDeg, loc_rot[2]*constRadToDeg)
-    #lamp.energy = 10  # 10 is the max value for energy
-    #lamp.type = 'POINT'  # in ['POINT', 'SUN', 'SPOT', 'HEMI', 'AREA']
-    #lamp.distance = 100
-    if lamp_type == 'SUN':
-        print('sun')
+    lamp.energy = lamp_energy
+    lamp.type = lamp_type
+    if lamp.type == 'SUN':
         bpy.data.lamps[lamp_name].sky.use_sky = True
     bpy.context.scene.objects.link(lamp)
     return lamp
 
-#Load obj from path, join and select it
-#Note: Follow shapenet defined axis in import to use correct object dimensions
 def addObject(obj_path,axis_forward=None,axis_up=None):
+    """Load Object from path to current scene
+    and align according to given axes]
+    """
     prior_objects = [object.name for object in bpy.context.scene.objects]
     if axis_forward and axis_up:
-        bpy.ops.import_scene.obj(filepath=obj_path, axis_forward=axis_forward, axis_up=axis_up, filter_glob="*.OBJ;*.obj")
+        bpy.ops.import_scene.obj(filepath=obj_path, axis_forward=axis_forward,
+            axis_up=axis_up, filter_glob="*.OBJ;*.obj")
     elif axis_forward and not axis_up:
-        bpy.ops.import_scene.obj(filepath=obj_path, axis_forward=axis_forward, filter_glob="*.OBJ;*.obj")
+        bpy.ops.import_scene.obj(filepath=obj_path, axis_forward=axis_forward,
+            filter_glob="*.OBJ;*.obj")
     elif not axis_forward and axis_up:
-        bpy.ops.import_scene.obj(filepath=obj_path, axis_up=axis_up, filter_glob="*.OBJ;*.obj")
+        bpy.ops.import_scene.obj(filepath=obj_path, axis_up=axis_up,
+            filter_glob="*.OBJ;*.obj")
     elif not axis_forward and not axis_up:
         bpy.ops.import_scene.obj(filepath=obj_path, filter_glob="*.OBJ;*.obj")
+
+    # join parts of object
     new_current_objects = [object.name for object in bpy.context.scene.objects]
     new_objects = list(set(new_current_objects)-set(prior_objects))
     bpy.context.scene.objects.active = bpy.data.objects[new_objects[0]]
     for obj in new_objects:
         bpy.data.objects[obj].select = True
     bpy.ops.object.join()
+
     # name object for future Refer
     obj = bpy.context.active_object
     obj.name = name_from_path(obj_path)
     print('Added Object from Path: {}'.format(obj_path))
     return obj
 
-def get_random_rot_euler():
-    theta1 = radians(random.uniform(0,360))#random.uniform(0,360)
-    theta2 = radians(random.uniform(0,360))
-    theta3 = radians(random.uniform(0,360))
-    return ((theta1, theta2, theta3))
-
-
 def preprocess_object(obj,fov):
+    """Ajust size of object to fill coverage of frame with longest side"""
     Bx = np.array([(obj.matrix_world * v.co) for v in obj.data.vertices])
     bbox = [ [np.min(Bx[:,0]), np.min(Bx[:,1]), np.min(Bx[:,2])], [np.max(Bx[:,0]), np.max(Bx[:,1]), np.max(Bx[:,2])] ]
     size_obj = [ bbox[1][0]-bbox[0][0], bbox[1][1]-bbox[0][1], bbox[1][2]-bbox[0][2] ]
     #obj.location = obj.location - Vector(( (bbox[0][0]+bbox[1][0])/2, (bbox[0][1]+bbox[1][1])/2, (bbox[0][2]+bbox[1][2])/2 ))
     size_max = max(size_obj[0:2])
-    scale = (fov/size_max)*(COVERAGE)         # this makes the largest dimension of the object cover <coverage>*100 % of the image
+    # make the largest dim of the object cover <coverage>*100 % of the image
+    scale = (fov/size_max)*(COVERAGE)
     obj.scale = Vector((scale,scale,scale))
     obj.rotation_euler = get_random_rot_euler()
     size_obj = np.array(size_obj)*scale
@@ -220,23 +229,19 @@ def updateScene(scene_name, object_paths, lamps, camera = None):
     for obj in bpy.data.objects:
         obj.select == True
         bpy.ops.object.delete()
-    objs = {}
+    objs = []
     for n, obj_path in enumerate(object_paths):
-        key = 'obj{}'.format(n)
-        objs[key] = addObject(obj_path, axis_forward='-X', axis_up='Y')
+        objs.append(addObject(obj_path, axis_forward='-X', axis_up='Y'))
 
     for lamp in lamps:
-        addLamps(lamp['name'], lamp['type'], lamp['loc'], lamp['rot'],
-            lamp['bIsPoint'], lamp['pointTo'])
+        addLamps(lamp['name'], lamp['type'], lamp['energy'], lamp['loc'],
+            lamp['point_to'], lamp['rot'])
 
     if camera:
-        addCameras(camera['name'], camera['loc'], camera['rot'],
-            camera['bIsPoint'], camera['pointTo'])
+        addCameras(camera['name'], camera['loc'], point_to = camera['point_to'])
 
     bpy.context.screen.scene.update()
-
-    if 'obj0' in objs:
-        return objs['obj0']
+    return objs
 
 
 ######## Setting up Scenes and Objects #########################################
@@ -270,33 +275,27 @@ if two_vids:
     # setup cameras and lamps
     cameraA = {'name': cameraName1,
             'loc': camera_location,
-            'rot':  camera_rot,
-            'bIsPoint': True,
-            'pointTo': origin
+            'point_to': origin
     }
     cameraB = {'name': cameraName2,
             'loc': camera_location,
-            'rot':  camera_rot,
-            'bIsPoint': True,
-            'pointTo': origin
+            'point_to': origin
     }
 
     lampsA = [
         {'name': lampName1,
             'type': 'POINT',
+            'energy': lamp_energy
             'loc': lamp_location,
-            'rot': lamp_rot,
-            'bIsPoint': True,
-            'pointTo': origin
+            'point_to': origin
         }
     ]
     lampsB = [
         {'name': lampName1,
             'type': 'POINT',
+            'energy': lamp_energy
             'loc': lamp_location,
-            'rot': lamp_rot,
-            'bIsPoint': True,
-            'pointTo': origin
+            'point_to': origin
         }
     ]
 
@@ -306,39 +305,36 @@ if two_vids:
     scene2 = addScene(sceneName2, 'world_B')
     camera_scene = scene1
 
-    obj1 = updateScene(sceneName1, [obj_pathA], lampsA, cameraA)
-    obj2 = updateScene(sceneName2, [obj_pathB], lampsB, cameraB)
+    obj1 = updateScene(sceneName1, [obj_pathA], lampsA, cameraA)[0]
+    obj2 = updateScene(sceneName2, [obj_pathB], lampsB, cameraB)[0]
 
 if not two_vids:
     cameraT = {'name': 'target_camera',
             'loc': camera_location,
-            'rot':  camera_rot,
-            'bIsPoint': True,
-            'pointTo': origin
+            'point_to': origin
     }
 
     lampsT = [
         {'name': 'target_lamp',
             'type': 'POINT',
+            'energy': lamp_energy
             'loc': lamp_location,
-            'rot': lamp_rot,
-            'bIsPoint': True,
-            'pointTo': origin
+            'point_to': origin
         }
     ]
 
-    set_up_world('target')
+    set_up_world('AB')
 
     scene1 = addScene(sceneName1)
     scene2 = addScene(sceneName2)
     target_scene = addScene('AB', world = 'target')
     camera_scene = target_scene
 
-    obj1 = updateScene(sceneName1, [obj_pathA], [])
-    obj2 = updateScene(sceneName2, [obj_pathB], [])
-    updateScene('target', [], lampsT, cameraT)
+    obj1 = updateScene(sceneName1, [obj_pathA], [])[0]
+    obj2 = updateScene(sceneName2, [obj_pathB], [])[0]
+    updateScene('AB', [], lampsT, cameraT)
 
-Scenes = {'A':scene1, 'B':scene2, 'target': target_scene}
+Scenes = {'A':scene1, 'B':scene2, 'AB': target_scene}
 Objs = {'A':obj1, 'B':obj2}
 opposite = {'A': 'B', 'B': 'A'}
 
@@ -388,7 +384,7 @@ P['B']['y'] = np.linspace(y1_b, y2_b, opt.number_of_frames)
 
 for n in range(N):
     if not two_vids:
-        bpy.context.screen.scene = Scenes['target']
+        bpy.context.screen.scene = Scenes['AB']
         bpy.context.scene.frame_start = 0
         bpy.context.scene.frame_end = opt.number_of_frames*2 -1
     for name in ['A','B']:
@@ -461,32 +457,10 @@ for n in range(N):
                 imgs.append(pixels)
 
             from PIL import Image
-
-            '''
-            # test if imgs contrains correct frames/
-            for i in range(opt.number_of_frames):
-                array = imgs[i]*255
-                #tmp = array[:, :, 3]
-                #array[:, :, 3] = array[:, :, 0]
-                #array[:, :, 0] = tmp
-                array = array[:, :, :3]
-                array = array.astype('uint8')
-                img = Image.fromarray(array, 'RGB')
-                #background = Image.new("RGB", img.size, (255, 255, 255))
-                #background.paste(img, mask=img.split()[3]) # 3 is the alpha channel
-
-                img.save(os.path.join(opt.outroot, "test_" + str(i) + '.png'), 'PNG')
-                #print(array[:,:,:])
-                #img.save(os.path.join(opt.outroot, "test_" + str(i) + '.png'))
-            '''
-            import sys
-            #sys.path.append('/usr/lib/python3.4/tkinter/')
-            #sys.path.append('/home/laurenz/anaconda3/lib/python3.6/tkinter/')
             import matplotlib as mpl
             mpl.use('Agg')
             import matplotlib.pyplot as plt
             import subprocess
-
 
             dpi = 100
             # create a figure window that is the exact size of the image

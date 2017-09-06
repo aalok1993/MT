@@ -50,6 +50,7 @@ camera_location = Vector((0,0,CAM_DISTANCE))
 camera_rot = Vector((0.0,0.0,0.0))
 lamp_location = Vector((6,6,6))
 lamp_rot = Vector((0.0,0.0,0.0))
+lamp_energy = 2.0
 cameraName1 = 'Camera1'
 cameraName2 = 'Camera2'
 lampName1 = 'Lamp1'
@@ -133,16 +134,16 @@ def addLamps(lamp_name, lamp_type, lamp_energy, loc_point, point_to = None,
     loc_rot = None):
     """Add a lamp to currently selected scene """
     lamp_data = bpy.data.lamps.new(name=lamp_name, type=lamp_type)
+    lamp_data.type = lamp_type
+    if lamp_data.type == 'SUN':
+        lamp_data.sky.use_sky = True
+    lamp_data.energy = lamp_energy
     lamp = bpy.data.objects.new(name=lamp_name, object_data=lamp_data)
     lamp.location = loc_point
     if point_to:
         look_at(lamp, point_to)
     elif loc_rot:
         lamp.rotation_euler = (loc_rot[0]*constRadToDeg,loc_rot[1]*constRadToDeg, loc_rot[2]*constRadToDeg)
-    lamp.energy = lamp_energy
-    lamp.type = lamp_type
-    if lamp.type == 'SUN':
-        bpy.data.lamps[lamp_name].sky.use_sky = True
     bpy.context.scene.objects.link(lamp)
     return lamp
 
@@ -208,7 +209,7 @@ def addScene(sceneName, world=None):
         scene.world.light_settings.environment_energy = np.random.uniform(0,1)
         scene.world.light_settings.environment_color = 'PLAIN'
 
-    if use_gpu and engine == 'CYCLES':
+    if opt.gpu and opt.engine == 'CYCLES':
         scene.cycles.device = 'GPU'
     return scene
 
@@ -235,10 +236,11 @@ def updateScene(scene_name, object_paths, lamps, camera = None):
 
     for lamp in lamps:
         addLamps(lamp['name'], lamp['type'], lamp['energy'], lamp['loc'],
-            lamp['point_to'], lamp['rot'])
+            point_to= lamp['point_to'], loc_rot=lamp['rot'])
 
     if camera:
-        addCameras(camera['name'], camera['loc'], point_to = camera['point_to'])
+        addCameras(camera['name'], camera['loc'], point_to = camera['point_to'],
+            loc_rot = camera['rot'])
 
     bpy.context.screen.scene.update()
     return objs
@@ -264,6 +266,7 @@ obj_B_id = object_B_ids[random.randint(0, number_of_objects_B-1)]
 obj_pathA = os.path.join(opt.dataroot, synset_A, obj_A_id, 'models/model_normalized.obj')
 obj_pathB = os.path.join(opt.dataroot, synset_B, obj_B_id, 'models/model_normalized.obj')
 paths = {}
+print(obj_pathB)
 paths['A']= obj_pathA
 paths['B'] = obj_pathB
 names = {}
@@ -275,27 +278,31 @@ if two_vids:
     # setup cameras and lamps
     cameraA = {'name': cameraName1,
             'loc': camera_location,
-            'point_to': origin
+            'point_to': origin,
+            'rot': None
     }
     cameraB = {'name': cameraName2,
             'loc': camera_location,
-            'point_to': origin
+            'point_to': origin,
+            'rot': None
     }
 
     lampsA = [
         {'name': lampName1,
             'type': 'POINT',
-            'energy': lamp_energy
+            'energy': lamp_energy,
             'loc': lamp_location,
-            'point_to': origin
+            'point_to': origin,
+            'rot': None
         }
     ]
     lampsB = [
         {'name': lampName1,
             'type': 'POINT',
-            'energy': lamp_energy
+            'energy': lamp_energy,
             'loc': lamp_location,
-            'point_to': origin
+            'point_to': origin,
+            'rot': None
         }
     ]
 
@@ -311,15 +318,17 @@ if two_vids:
 if not two_vids:
     cameraT = {'name': 'target_camera',
             'loc': camera_location,
-            'point_to': origin
+            'point_to': origin,
+            'rot': None
     }
 
     lampsT = [
         {'name': 'target_lamp',
             'type': 'POINT',
-            'energy': lamp_energy
+            'energy': lamp_energy,
             'loc': lamp_location,
-            'point_to': origin
+            'point_to': origin,
+            'rot': None
         }
     ]
 
@@ -327,7 +336,7 @@ if not two_vids:
 
     scene1 = addScene(sceneName1)
     scene2 = addScene(sceneName2)
-    target_scene = addScene('AB', world = 'target')
+    target_scene = addScene('AB', world = 'AB')
     camera_scene = target_scene
 
     obj1 = updateScene(sceneName1, [obj_pathA], [])[0]

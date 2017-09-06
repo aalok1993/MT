@@ -22,3 +22,6 @@ class ManagedScene():
         world.use_sky_real = True
         world.horizon_color = horizon_color
         world.zenith_color = zenith_color
+
+    def add_blob(blob):
+        pass

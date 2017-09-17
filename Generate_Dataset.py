@@ -17,7 +17,7 @@ import os
 import numpy as np
 from math import radians, tan
 import random
-random.seed(98)
+#random.seed(98)
 import hashlib
 import math
 
@@ -506,12 +506,18 @@ for n in range(opt.number_of_vids):
             if name == 'B':
                 bpy.context.scene.frame_start = add_frames
                 bpy.context.scene.frame_end = opt.number_of_frames*2 -1
+                file_name = name_from_string(names[name]+str(dist_x)+str(dist_y)+str(x1_b))
+            else:
+                file_name = name_from_string(names[name]+str(dist_x)+str(dist_y)+str(x1_a))
+            bpy.context.scene.render.filepath = os.path.join(opt.outroot + file_name)
             bpy.context.scene.render.image_settings.file_format = 'AVI_JPEG'
             bpy.context.scene.render.fps = 6
             bpy.ops.render.render(animation=True)
 
     if not opt.single_frames and not opt.two_vids:
         bpy.context.scene.render.image_settings.file_format = 'AVI_JPEG'
+        file_name = name_from_string(names['AB']+str(dist_x)+str(dist_y)+str(x1_a)+str(x1_b))
+        bpy.context.scene.render.filepath = os.path.join(opt.outroot + file_name)
         bpy.context.scene.render.fps = 6
         bpy.ops.render.render(animation=True)
 

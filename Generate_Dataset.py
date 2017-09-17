@@ -17,8 +17,9 @@ import os
 import numpy as np
 from math import radians, tan
 import random
-#random.seed(123454)
+random.seed(98)
 import hashlib
+import math
 
 import bpy
 from bpy.types import Operator
@@ -43,7 +44,7 @@ opt = GenOptions().parse(args)
 # Define all the functions, parameters, options that are
 # going to be used in the code.
 
-COVERAGE = 1.0/3
+coverage = 1.0/3.0
 CAM_DISTANCE = 10
 origin = Vector((0,0,0))
 camera_location = Vector((0,0,CAM_DISTANCE))
@@ -62,12 +63,6 @@ alpha_sat = 2.5
 beta_sat = 0.15
 alpha_val = 1.5
 beta_val = 0.1
-
-same_category = False # if True, A an B from same synset
-align_direction_with_movement = True
-single_frames = False # export rendering as single .png images
-two_vids = False
-
 
 synset_name_pairs = [('02691156', 'aeroplane'),
                              ('02834778', 'bicycle'),
@@ -204,25 +199,33 @@ def addObject(obj_path,axis_forward=None,axis_up=None):
         bpy.data.objects[obj].select = True
     bpy.ops.object.join()
 
+    # set  origin to geometric center of bounding box
+    bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
+
     # name object for future Refer
     obj = bpy.context.active_object
     obj.name = name_from_string(obj_path)
     #print('Added Object from Path: {}'.format(obj_path))
     return obj
 
-def preprocess_object(obj,fov):
+def preprocess_object(obj,cam_distance):
     """Ajust size of object to fill coverage of frame with longest side"""
-    Bx = np.array([(obj.matrix_world * v.co) for v in obj.data.vertices])
-    bbox = [ [np.min(Bx[:,0]), np.min(Bx[:,1]), np.min(Bx[:,2])], [np.max(Bx[:,0]), np.max(Bx[:,1]), np.max(Bx[:,2])] ]
-    size_obj = [ bbox[1][0]-bbox[0][0], bbox[1][1]-bbox[0][1], bbox[1][2]-bbox[0][2] ]
-    #obj.location = obj.location - Vector(( (bbox[0][0]+bbox[1][0])/2, (bbox[0][1]+bbox[1][1])/2, (bbox[0][2]+bbox[1][2])/2 ))
-    size_max = max(size_obj[0:2])
-    # make the largest dim of the object cover <coverage>*100 % of the image
-    scale = (fov/size_max)*(COVERAGE)
-    obj.scale = Vector((scale,scale,scale))
     obj.rotation_euler = get_random_rot_euler()
+    Bx = np.array([(obj.matrix_world * v.co) for v in obj.data.vertices])
+    print(Bx.shape)
+    bbox = [ [np.min(Bx[:,0]), np.min(Bx[:,1]), np.min(Bx[:,2])], [np.max(Bx[:,0]), np.max(Bx[:,1]), np.max(Bx[:,2])] ]
+    size_obj = [ bbox[1][0]-bbox[0][0], bbox[1][1]-bbox[0][1], bbox[1][2]-bbox[0][2]]
+    size_max = np.linalg.norm(size_obj[0:3])
+    fov = cam_distance * tan(camera_scene.camera.data.angle/2)*2
+    # fov at upper point of object
+    fov_top = (cam_distance-size_obj[2]) * tan(camera_scene.camera.data.angle/2)*2
+    # make the largest dim (x,y plane) of the object cover <coverage>*100 % of the image
+    scale = (fov/size_max)*(coverage)
+    print(size_obj)
+    obj.scale = Vector((scale,scale,scale))
     size_obj = np.array(size_obj)*scale
-    return size_obj[0], size_obj[1]
+    print(size_obj)
+    return size_obj[0], size_obj[1], fov_top
 
 
 def addScene(sceneName, world=None, file_name=None):
@@ -355,7 +358,7 @@ number_of_synsets = len(synsets)
 
 for n in range(opt.number_of_vids):
     synset_A = synsets[random.randint(0, number_of_synsets-1)]
-    if not same_category:
+    if not opt.same_category:
         synset_B = synsets[random.randint(0, number_of_synsets-1)]
     else:
         synset_B = synset_A
@@ -390,7 +393,7 @@ for n in range(opt.number_of_vids):
                  zenith_color=colors_B[0])
 
 
-    if two_vids:
+    if opt.two_vids:
         scene1 = addScene(sceneName1, world='A', file_name=names['A'])
         scene2 = addScene(sceneName2, world='world_B', file_name=names['B'])
         camera_scene = scene1
@@ -399,7 +402,7 @@ for n in range(opt.number_of_vids):
         obj2 = updateScene(sceneName2, [obj_pathB], lampsB, cameraB)[0]
         Scenes = {'A':scene1, 'B':scene2}
 
-    if not two_vids:
+    if not opt.two_vids:
         scene1 = addScene('A')
         scene2 = addScene('B')
         target_scene = addScene('AB', world = 'A', file_name=names['AB'])
@@ -416,14 +419,11 @@ for n in range(opt.number_of_vids):
 
     ######## Calculate Trajectory ##############################################
 
-    # Refer this for FOV length http://www.scantips.com/lights/subjectdistance.html
-    fov = (CAM_DISTANCE * tan(camera_scene.camera.data.angle/2))*2
-    # fov_in_meters = 9.14
+    Lx_a, Ly_a, fov_A = preprocess_object(obj1, CAM_DISTANCE)
+    Lx_b, Ly_b, fov_B = preprocess_object(obj2, CAM_DISTANCE)
 
-    Sx = fov
-    Sy = fov
-    Lx_a, Ly_a = preprocess_object(obj1, fov)
-    Lx_b, Ly_b = preprocess_object(obj2, fov)
+    Sx = min(fov_A, fov_B)
+    Sy = min(fov_A, fov_B)
 
     max_x = min(Sx - Lx_a, Sx - Lx_b)
     max_y = min(Sy - Ly_a, Sy - Ly_b)
@@ -458,7 +458,7 @@ for n in range(opt.number_of_vids):
 
     ######## Create Animation ##################################################
 
-    if not two_vids:
+    if not opt.two_vids:
         bpy.context.screen.scene = Scenes['AB']
         bpy.context.scene.frame_start = 0
         bpy.context.scene.frame_end = opt.number_of_frames*2 -1
@@ -467,11 +467,11 @@ for n in range(opt.number_of_vids):
         if name == 'B':
             add_frames = 10
 
-        if two_vids:
+        if opt.two_vids:
             bpy.context.screen.scene = Scenes[name]
             bpy.context.scene.frame_start = 0
             bpy.context.scene.frame_end = opt.number_of_frames -1
-        if not two_vids:
+        if not opt.two_vids:
             bpy.context.scene.objects.link(Objs[name])
             bpy.context.scene.frame_set(add_frames)
             bpy.data.objects[names[name]].hide_render = False
@@ -480,7 +480,7 @@ for n in range(opt.number_of_vids):
                 obj.keyframe_insert(data_path='hide_render')
             bpy.context.scene.update()
 
-        # TODO: Does not work if not two_vids, try this solution
+        # TODO: Does not work if not opt.two_vids, try this solution
         # https://blender.stackexchange.com/questions/7321/workaround-to-keyframe-the-world-setting
         bpy.context.screen.scene.world = bpy.data.worlds.get(name)
 
@@ -488,7 +488,7 @@ for n in range(opt.number_of_vids):
         bpy.ops.object.select_pattern(pattern=names[name])
         #print('Active Object: {}'.format(bpy.context.scene.objects.active))
 
-        if align_direction_with_movement:
+        if opt.align_obj_with_motion:
             direction = Vector((P[name]['x'][1]-P[name]['x'][0],
                                 P[name]['y'][1]-P[name]['y'][0], 0))
             look_in(Objs[name], direction)
@@ -497,12 +497,12 @@ for n in range(opt.number_of_vids):
             bpy.context.scene.frame_set(i+add_frames)
             Objs[name].location = Vector((P[name]['x'][i], P[name]['y'][i], 0))
             Objs[name].keyframe_insert(data_path="location")
-            if single_frames:
+            if opt.single_frames:
                 bpy.context.scene.render.filepath = (opt.outroot +
                     '{:s}_{:02d}.jpg'.format(name,i))
                 bpy.ops.render.render(write_still=True)
 
-        if not single_frames and two_vids:
+        if not opt.single_frames and opt.two_vids:
             if name == 'B':
                 bpy.context.scene.frame_start = add_frames
                 bpy.context.scene.frame_end = opt.number_of_frames*2 -1
@@ -510,7 +510,7 @@ for n in range(opt.number_of_vids):
             bpy.context.scene.render.fps = 6
             bpy.ops.render.render(animation=True)
 
-    if not single_frames and not two_vids:
+    if not opt.single_frames and not opt.two_vids:
         bpy.context.scene.render.image_settings.file_format = 'AVI_JPEG'
         bpy.context.scene.render.fps = 6
         bpy.ops.render.render(animation=True)
